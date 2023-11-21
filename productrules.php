@@ -46,6 +46,7 @@ class ProductRules extends Module
         return parent::install() && 
                 $this->registerHook(['actionProductFormBuilderModifier']) && 
                 $this->registerHook(['actionProductUpdate']) && 
+                $this->registerHook(['actionCartUpdateQuantityBefore']) && 
                 $this->registerHook(['displayBackOfficeHeader'])
                 
                 ;
@@ -507,6 +508,54 @@ class ProductRules extends Module
 
         
 
+    }
+
+    public function hookActionCartUpdateQuantityBefore(array $params)
+    {
+        $id_product = $_POST['id_product'];
+        $qty = $_POST['qty'];
+        
+        $afa_cart = $params['cart'];
+        $customer_id = intval($afa_cart->id_customer);
+
+        if (!$customer_id)
+        {
+            $country_id = Tools::getCountry();
+        }
+        else
+        {
+            # get customer country;
+            $txtSelectQry = "SELECT id_country  FROM "._DB_PREFIX_."address 
+                        WHERE id_customer = '" . $customer_id . "'";
+            $arrAddress = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+            $country_id = $arrAddress[0]['id_country'];
+        }
+
+        # get country code from country_id
+        $txtSelectQry = "SELECT iso_code  FROM "._DB_PREFIX_."country 
+                        WHERE id_country = '" . $country_id . "'";
+        $arrCountry = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+        $iso_code = $arrCountry[0]['iso_code'];
+
+        #check if we have any rule set for this product in this country;
+        $txtSelectQry = "SELECT min_qty  FROM "._DB_PREFIX_."product_country_restrictions 
+                        WHERE id_product = '" . $id_product . "' AND 
+                        country_code LIKE '%".$iso_code."%'";
+        $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        if ($arrRules)
+        {
+            $min_qty = $arrRules[0]['min_qty'];
+
+            if ($qty < $min_qty)
+            {
+                die(json_encode([
+                    'errors' => '1. Minimum qty set for country ' . $iso_code . ' is ' . $min_qty,
+                    'hasError' => true,
+                    'success' => "false"
+                ]));
+            }
+        }
     }
 
 
