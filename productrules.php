@@ -1,8 +1,13 @@
 <?php
 declare(strict_types=1);
 
-use Symfony\Component\Form\Extension\Core\Type\TextType;
+if (!class_exists('\GeoIp2\Database\Reader')) {
+    require_once __DIR__ . '/geoip2/vendor/autoload.php';
+}
 
+use GeoIp2\Database\Reader;
+
+use Symfony\Component\Form\Extension\Core\Type\TextType;
 use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\ProductId;
 
 class ProductRules extends Module
@@ -54,7 +59,12 @@ class ProductRules extends Module
     }
 
     public function hookDisplayBeforeBodyClosingTag() {
-        
+
+        //$reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
+        //$record = $reader->city( $_SERVER['REMOTE_ADDR'] );
+        //echo $iso_code = $record->country->isoCode;
+
+
         if ($this->context->controller instanceof ProductController)
         {
             ob_start();
@@ -567,9 +577,14 @@ class ProductRules extends Module
 
     public function hookActionCartUpdateQuantityBefore(array $params)
     {
+        $reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
+        $record = $reader->city( $_SERVER['REMOTE_ADDR'] );
+        $iso_code = $record->country->isoCode;
+        
         $id_product = $_POST['id_product'];
         $qty = $_POST['qty'];
         
+        /*
         $afa_cart = $params['cart'];
         $customer_id = intval($afa_cart->id_customer);
 
@@ -591,6 +606,9 @@ class ProductRules extends Module
                         WHERE id_country = '" . $country_id . "'";
         $arrCountry = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
         $iso_code = $arrCountry[0]['iso_code'];
+        */
+
+        
 
         #check if we have any rule set for this product in this country;
         $txtSelectQry = "SELECT min_qty  FROM "._DB_PREFIX_."product_country_restrictions 
@@ -613,7 +631,7 @@ class ProductRules extends Module
                 
                 
                 die(json_encode([
-                    'errors' => ['Minimum qty set for country ' . $iso_code . ' is ' . $min_qty]
+                    'errors' => ['Minimum quantity set for ' . $record->country->names['en'] . ' is ' . $min_qty]
                 ]));
                 
             }
