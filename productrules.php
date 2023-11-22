@@ -47,9 +47,64 @@ class ProductRules extends Module
                 $this->registerHook(['actionProductFormBuilderModifier']) && 
                 $this->registerHook(['actionProductUpdate']) && 
                 $this->registerHook(['actionCartUpdateQuantityBefore']) && 
+                $this->registerHook(['displayBeforeBodyClosingTag']) && 
                 $this->registerHook(['displayBackOfficeHeader'])
                 
                 ;
+    }
+
+    public function hookDisplayBeforeBodyClosingTag() {
+        
+        if ($this->context->controller instanceof ProductController)
+        {
+            ob_start();
+            ?>
+            <script>
+                //if (typeof jQuery != 'undefined') 
+                
+                    let errors = [];
+                    ;jQuery(function ($) {
+                    // here we locally store the errors into our errors var, for later usage.
+                    prestashop.on('updateCart', function (event) {
+                        if (event && event.resp && event.resp.errors.length) {
+                            console.log('in error');
+                            errors = event.resp.errors;
+                            prestashop.emit('showErrorNextToAddtoCartButton', { errorMessage: event.resp.errors.join('<br />')});
+                            return;
+                        }
+                        console.log('not in error');
+                        // remove errors contents for any other update without errors
+                        errors = [];
+                    })
+                    });
+                    
+                    // ps_shoppingcart modal behavior override (actual fix)
+                    prestashop.blockcart.showModal = function (modal) {
+                    // if we're getting errors, do not show the modal
+                    if (errors.length) {
+                        return;
+                    }
+
+                    window.location.replace(prestashop.urls.pages.cart);
+
+                    var $body = $('body');
+                    $body.append(modal);
+                    $body.on('click', '#blockcart-modal', function (event) {
+                        if (event.target.id === 'blockcart-modal') {
+                        $(event.target).remove();
+                        }
+                    });
+                    return modal;
+                    
+                    }
+                    
+                
+            </script>
+            <?php
+            return ob_get_clean();
+        }
+        
+        
     }
 
     public function hookDisplayBackOfficeHeader( $params ) {
@@ -140,7 +195,7 @@ class ProductRules extends Module
                 function makeInputQty(qty) {
                     inputQty = `<div class="col-md-6">
                         <label>Enter Minimum Quantity</label>
-                        <input type="text" name="qty_limit[]" class="form-control" value="`+qty+`" />
+                        <input type="text" name="qty_limit[`+lmtCount+`]" class="form-control" value="`+qty+`" />
                     </div>
                     </div>
                     `;
@@ -549,13 +604,28 @@ class ProductRules extends Module
 
             if ($qty < $min_qty)
             {
-                die(json_encode([
+                
+                /* die(json_encode([
                     'errors' => '1. Minimum qty set for country ' . $iso_code . ' is ' . $min_qty,
                     'hasError' => true,
                     'success' => "false"
+                ])); */
+                
+                
+                die(json_encode([
+                    'errors' => ['Minimum qty set for country ' . $iso_code . ' is ' . $min_qty]
                 ]));
+                
             }
         }
+
+        /* 
+        die(json_encode([
+            'errors' => '2. Minimum qty set for country ' . $iso_code . ' is ' . $min_qty,
+            'hasError' => true,
+            'success' => "false"
+        ])); 
+        */
     }
 
 
