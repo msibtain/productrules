@@ -53,79 +53,22 @@ class ProductRules extends Module
                 $this->registerHook(['actionProductUpdate']) && 
                 $this->registerHook(['actionCartUpdateQuantityBefore']) && 
                 $this->registerHook(['displayBeforeBodyClosingTag']) && 
+                $this->registerHook(['displayAdminEndContent']) && 
+                
                 $this->registerHook(['displayBackOfficeHeader'])
                 
                 ;
     }
 
-    public function hookDisplayBeforeBodyClosingTag() {
-
-        //$reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
-        //$record = $reader->city( $_SERVER['REMOTE_ADDR'] );
-        //echo $iso_code = $record->country->isoCode;
-
-
-        if ($this->context->controller instanceof ProductController)
-        {
-            ob_start();
-            ?>
-            <script>
-                //if (typeof jQuery != 'undefined') 
-                
-                    let errors = [];
-                    ;jQuery(function ($) {
-                    // here we locally store the errors into our errors var, for later usage.
-                    prestashop.on('updateCart', function (event) {
-                        if (event && event.resp && event.resp.errors.length) {
-                            console.log('in error');
-                            errors = event.resp.errors;
-                            prestashop.emit('showErrorNextToAddtoCartButton', { errorMessage: event.resp.errors.join('<br />')});
-                            return;
-                        }
-                        console.log('not in error');
-                        // remove errors contents for any other update without errors
-                        errors = [];
-                    })
-                    });
-                    
-                    // ps_shoppingcart modal behavior override (actual fix)
-                    prestashop.blockcart.showModal = function (modal) {
-                    // if we're getting errors, do not show the modal
-                    if (errors.length) {
-                        return;
-                    }
-
-                    window.location.replace(prestashop.urls.pages.cart);
-
-                    var $body = $('body');
-                    $body.append(modal);
-                    $body.on('click', '#blockcart-modal', function (event) {
-                        if (event.target.id === 'blockcart-modal') {
-                        $(event.target).remove();
-                        }
-                    });
-                    return modal;
-                    
-                    }
-                    
-                
-            </script>
-            <?php
-            return ob_get_clean();
-        }
-        
-        
-    }
-
-    public function hookDisplayBackOfficeHeader( $params ) {
-
+    public function hookDisplayAdminEndContent( $params ) {
         $id_product = Tools::getValue('id_product');
+
+        if ($id_product) :
 
         $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."product_country_restrictions 
                         WHERE id_product = '" . $id_product . "'";
         $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
 
-        
         ?>
         
         <script>
@@ -523,6 +466,96 @@ class ProductRules extends Module
             
         </script>
         <?php
+
+        endif; // if $id_product
+
+    }
+
+    public function hookDisplayBeforeBodyClosingTag( $params ) {
+
+        //$reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
+        //$record = $reader->city( $_SERVER['REMOTE_ADDR'] );
+        //echo $iso_code = $record->country->isoCode;
+
+        if ($this->context->controller instanceof ProductController)
+        {
+
+            # disable add to card button if minimum quantity is set to -1 for this country;
+            $reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
+            $record = $reader->city( $_SERVER['REMOTE_ADDR'] );
+            $iso_code = $record->country->isoCode;
+        
+            $id_product = Tools::getValue('id_product');
+
+            #check if we have any rule set for this product in this country;
+            $txtSelectQry = "SELECT min_qty  FROM "._DB_PREFIX_."product_country_restrictions 
+                        WHERE id_product = '" . $id_product . "' AND 
+                        country_code LIKE '%".$iso_code."%'";
+            $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+             
+            ob_start();
+            ?>
+            <script>
+
+                <?php
+                if ($arrRules && $arrRules[0]['min_qty'] === "-1")
+                {
+                    ?>
+                    jQuery(document).ready(function($){
+                        $('.product-add-to-cart').hide();
+                    });
+                    <?php
+                }
+                ?>
+                
+                //if (typeof jQuery != 'undefined') 
+                
+                    let errors = [];
+                    ;jQuery(function ($) {
+                    // here we locally store the errors into our errors var, for later usage.
+                    prestashop.on('updateCart', function (event) {
+                        if (event && event.resp && event.resp.errors.length) {
+                            console.log('in error');
+                            errors = event.resp.errors;
+                            prestashop.emit('showErrorNextToAddtoCartButton', { errorMessage: event.resp.errors.join('<br />')});
+                            return;
+                        }
+                        console.log('not in error');
+                        // remove errors contents for any other update without errors
+                        errors = [];
+                    })
+                    });
+                    
+                    // ps_shoppingcart modal behavior override (actual fix)
+                    prestashop.blockcart.showModal = function (modal) {
+                    // if we're getting errors, do not show the modal
+                    if (errors.length) {
+                        return;
+                    }
+
+                    window.location.replace(prestashop.urls.pages.cart);
+
+                    var $body = $('body');
+                    $body.append(modal);
+                    $body.on('click', '#blockcart-modal', function (event) {
+                        if (event.target.id === 'blockcart-modal') {
+                        $(event.target).remove();
+                        }
+                    });
+                    return modal;
+                    
+                    }
+                    
+                
+            </script>
+            <?php
+            return ob_get_clean();
+        }
+        
+        
+    }
+
+    public function hookDisplayBackOfficeHeader( $params ) {
     }
 
     
