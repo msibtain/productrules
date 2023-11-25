@@ -8,15 +8,18 @@ if (!class_exists('\GeoIp2\Database\Reader')) {
 use GeoIp2\Database\Reader;
 
 use Symfony\Component\Form\Extension\Core\Type\TextType;
+use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
+
 use PrestaShop\PrestaShop\Core\Domain\Product\ValueObject\ProductId;
 
 class ProductRules extends Module
 {
+
     public function __construct()
     {
         $this->name = 'productrules';
         $this->tab = 'front_office_features';
-        $this->version = '1.0.0';
+        $this->version = '1.2.0';
         $this->author = 'Zumlex';
         $this->need_instance = 1;
         $this->ps_versions_compliancy = [
@@ -33,31 +36,64 @@ class ProductRules extends Module
         $this->confirmUninstall = $this->trans('Are you sure you want to uninstall?', [], 'Modules.Productrules.Admin');
 
         
-
-        
     }
 
     public function install() {
-        // Run sql for creating DB tables
-        Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'product_country_restrictions` (
-                  `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-                  `id_product` INT( 11 ) UNSIGNED NOT NULL,
-                  `country_code` varchar(50) NOT NULL,
-                  `min_qty` INT(11) NOT NULL,
-                  PRIMARY KEY (`id`),
-                  UNIQUE  (  `id` )
-                  ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
+
+        $this->createDBTables();
 
         return parent::install() && 
-                $this->registerHook(['actionProductFormBuilderModifier']) && 
-                $this->registerHook(['actionProductUpdate']) && 
+
+        
+                $this->registerHook(['displayAdminProductsExtra']) &&                   // working in v 8.0
+                $this->registerHook(['actionProductFormBuilderModifier']) &&            // working in v 8.1
+                $this->registerHook(['actionProductUpdate']) &&                         
                 $this->registerHook(['actionCartUpdateQuantityBefore']) && 
                 $this->registerHook(['displayBeforeBodyClosingTag']) && 
                 $this->registerHook(['displayAdminEndContent']) && 
+
                 
-                $this->registerHook(['displayBackOfficeHeader'])
+                //$this->registerHook(['customerRegistration']) && 
+                $this->registerHook(['additionalCustomerFormFields']) && 
+                $this->registerHook(['actionObjectCustomerUpdateAfter']) && 
+                $this->registerHook(['actionObjectCustomerAddAfter']) && 
+
+                $this->registerHook(['actionCustomerFormBuilderModifier']) && 
+                $this->registerHook(['actionAfterUpdateCustomerFormHandler']) && 
+                $this->registerHook(['actionAfterCreateCustomerFormHandler']) && 
+
+                $this->registerHook(['actionCartSave']) && 
+                $this->registerHook(['actionProductPriceCalculation'])  
+
                 
+
+                
+
+
                 ;
+    }
+
+    private function createDBTables() {
+
+        // Run sql for creating DB tables
+        Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'product_country_restrictions` (
+            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `id_product` INT( 11 ) UNSIGNED NOT NULL,
+            `country_code` varchar(50) NOT NULL,
+            `min_qty` INT(11) NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE  (  `id` )
+            ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
+
+        // Run sql for creating DB tables
+        Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'customer_fields` (
+            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `id_customer` INT( 11 ) UNSIGNED NOT NULL,
+            `field` varchar(255) NOT NULL,
+            `value` varchar(255) NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE  (  `id` )
+            ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
     }
 
     public function hookDisplayAdminEndContent( $params ) {
@@ -492,13 +528,14 @@ class ProductRules extends Module
                         WHERE id_product = '" . $id_product . "' AND 
                         country_code LIKE '%".$iso_code."%'";
             $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
-             
+            
+            
             ob_start();
             ?>
             <script>
 
                 <?php
-                if ($arrRules && $arrRules[0]['min_qty'] === "-1")
+                if ($arrRules && $arrRules[0]['min_qty'] === -1)
                 {
                     ?>
                     jQuery(document).ready(function($){
@@ -554,12 +591,9 @@ class ProductRules extends Module
         
         
     }
-
-    public function hookDisplayBackOfficeHeader( $params ) {
-    }
-
     
     public function hookActionProductFormBuilderModifier(array $params) {
+
         $formBuilder = $params['form_builder'];     
         $formBuilder->add('my_text_field_example', TextType::class, [
             'label' => 'Product Rules',
@@ -567,27 +601,35 @@ class ProductRules extends Module
                 'class' => 'my-custom-class',
                 'data-hex'=> 'true'
             ]
-        ])
-        /*
-        ->add('my_switch_field_example', TextType::class, [
-            'label' => 'My switch'
-        ]) */
-        ;
+        ]);
 
-       
+    }
 
-        
+    public function hookDisplayAdminProductsExtra(array $params) {
+        $id_product = $params['id_product'];
+
+        $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."product_country_restrictions 
+                        WHERE id_product = '" . $id_product . "'";
+        $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        $this->context->smarty->assign('id_product', $id_product);
+        $this->context->smarty->assign('arrRules', $arrRules);
+        return $this->context->smarty->fetch(_PS_MODULE_DIR_ . $this->name . '/views/templates/admin/extra_fields.tpl');
     }
 
     public function hookActionProductUpdate($params)
     {
+
         Db::getInstance()->execute( "DELETE FROM " 
                         . _DB_PREFIX_ . "product_country_restrictions 
                         WHERE id_product = " . $params['id_product'] );
 
 
-        $country_limit = $_REQUEST['country_limit'];
-        $qty_limit = $_REQUEST['qty_limit'];
+        //$country_limit = $_REQUEST['country_limit'];
+        //$qty_limit = $_REQUEST['qty_limit'];
+
+        $country_limit = $_POST['country_limit'];
+        $qty_limit = $_POST['qty_limit'];
 
         foreach ($country_limit as $index => $country)
         {
@@ -679,5 +721,260 @@ class ProductRules extends Module
         */
     }
 
+    /*
+    public function hookCustomerRegistration($params) {
+        $this->context->smarty->assign('custom_field_label', 'Account Type');
+        $this->context->smarty->assign('custom_field_type', 'select');
+        return $this->context->smarty->fetch(_PS_MODULE_DIR_ . $this->name . '/views/hook/customer_registration.tpl');
+    }
+    */
+
+    public function hookAdditionalCustomerFormFields($params) {
+
+        $module_fields = $this->readModuleValues();
+
+        (isset($module_fields['account_type'])) ? $account_type = $module_fields['account_type'] : $account_type = '';
+        (isset($module_fields['tax_id_number'])) ? $tax_id_number = $module_fields['tax_id_number'] : $tax_id_number = '';
+        
+      
+        $extra_fields = array();
+        $extra_fields['account_type'] = (new FormField)
+          ->setName('account_type')
+          ->setType('select')
+          ->addAvailableValue('business', 'Business')
+          ->addAvailableValue('personal', 'Personal')
+          ->setValue($account_type)
+          ->setLabel($this->l('Account Type'));
+
+        $extra_fields['tax_id_number'] = (new FormField)
+          ->setName('tax_id_number')
+          ->setType('text')
+          ->setValue($tax_id_number)
+          ->setLabel($this->l('Tax ID Number'));
+      
+        return $extra_fields;
+    }
+
+    /**
+     * Customer update
+     */
+    public function hookactionObjectCustomerUpdateAfter($params)
+    {
+        $id = (int)$params['object']->id;
+        $this->writeModuleValues($id);
+    }
+
+    /**
+     * Customer add
+     */
+    public function hookactionObjectCustomerAddAfter($params)
+    {
+        $id = (int)$params['object']->id;
+        $this->writeModuleValues($id);
+    }
+
+    protected function readModuleValues($id_customer = '')
+    {
+        if (!$id_customer)
+            $id_customer = Context::getContext()->customer->id;
+
+        $module_values = [];
+
+        $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'account_type'";
+        $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        if (count($arrData))
+        {
+            $module_values['account_type'] = $arrData[0]['value'];
+        }
+
+        $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'tax_id_number'";
+        $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        if (count($arrData))
+        {
+            $module_values['tax_id_number'] = $arrData[0]['value'];
+        }
+
+        return $module_values;
+
+
+    }
+
+
+    protected function writeModuleValues($id_customer, $account_type = '', $tax_id_number = '')
+    {
+        if (!$account_type)
+            $account_type = Tools::getValue('account_type');
+
+        if (!$tax_id_number)
+            $tax_id_number = Tools::getValue('tax_id_number');
+
+        if ($account_type)
+        {
+            $txtSelectQry = "SELECT id  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'account_type'";
+            $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+            if ($arrData)
+            {
+                $query = 'UPDATE `'._DB_PREFIX_.'customer_fields` c '
+                .' SET  c.`value` = "'.pSQL($account_type).'"'
+                .' WHERE c.id = '.(int)$arrData[0]['id'];
+            }
+            else
+            {
+                $query = "INSERT into " . _DB_PREFIX_ . "customer_fields SET 
+                        `id_customer` = '".$id_customer."',
+                        `field` = 'account_type',
+                        `value` = '".pSQL($account_type)."'
+                ";
+            }
+
+            Db::getInstance()->execute($query);
+        }
+        
+        if ($tax_id_number)
+        {
+            $txtSelectQry = "SELECT id  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'tax_id_number'";
+            $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+            if ($arrData)
+            {
+                $query = 'UPDATE `'._DB_PREFIX_.'customer_fields` c '
+                .' SET  c.`value` = "'.pSQL($tax_id_number).'"'
+                .' WHERE c.id = '.(int)$arrData[0]['id'];
+            }
+            else
+            {
+                $query = "INSERT into " . _DB_PREFIX_ . "customer_fields SET 
+                        `id_customer` = '".$id_customer."',
+                        `field` = 'tax_id_number',
+                        `value` = '".pSQL($tax_id_number)."'
+                ";
+            }
+
+            Db::getInstance()->execute($query);
+        }
+
+    }
+
+    public function hookActionCustomerFormBuilderModifier(array $params)
+    {
+        /** @var FormBuilderInterface $formBuilder */
+        $formBuilder = $params['form_builder'];
+        $formBuilder->add('account_type', ChoiceType::class, [
+            'label' => 'Account Type',
+            'required' => false,
+            'choices' => [
+                'Personal' => 'personal',
+                'Business' => 'business'
+            ]
+        ])
+        ->add('tax_id_number', TextType::class, [
+            'label' => 'Tax ID Number',
+            'required' => false,
+        ])
+        ;
+        
+        //$customer = new Customer($params['id']);
+        $module_values = $this->readModuleValues( $params['id'] );
+        $params['data']['account_type'] = $module_values['account_type'];
+        $params['data']['tax_id_number'] = $module_values['tax_id_number'];
+        
+        $formBuilder->setData($params['data']);
+
+    }
+
+    public function hookActionAfterUpdateCustomerFormHandler(array $params)
+    {
+        $customerFormData = $params['form_data'];
+        $account_type = $customerFormData['account_type'];
+        $tax_id_number = $customerFormData['tax_id_number'];
+
+        $this->writeModuleValues( $params['id'], $account_type, $tax_id_number );
+    }
+
+    public function hookActionAfterCreateCustomerFormHandler(array $params)
+    {
+        $customerFormData = $params['form_data'];
+        $account_type = $customerFormData['account_type'];
+        $tax_id_number = $customerFormData['tax_id_number'];
+
+        $this->writeModuleValues( $params['id'], $account_type, $tax_id_number );
+    }
+
+    public function hookActionCartSave( $params ) {
+
+        /*
+        error_reporting(E_ALL);
+        ini_set('display_errors', '1');
+
+        $cart = $params['cart'];
+        $cart->setTaxesAmount(0);
+        $cart->update();
+
+        */
+
+        ###
+
+/*
+        // Get the cart
+        $cart = $params['cart'];
+
+        // Iterate through each cart product
+foreach ($cart->getProducts() as $product) {
+    // Get the product's price without tax
+    $productPriceWithoutTax = $product['price_without_tax'];
+
+    // Set the product's price to the price without tax
+    $product['price'] = $productPriceWithoutTax;
+}
+
+// Update the cart totals
+$cart->update();
+
+*/
+        
+    }
+
+    public function hookActionProductPriceCalculation($params)
+    {
+
+        //$this->p_r($params);
+        //exit;
+
+        // with_ecotax
+        // price
+        
+
+        
+        if ((int) $params['id_product'] === 19) {
+            
+            if ($params['use_tax']) 
+            {
+                $txtSelectQry = "SELECT price  FROM "._DB_PREFIX_."product 
+                        WHERE id_product = '" . $params['id_product'] . "'";
+                $arrProduct = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+                $params['price'] = $arrProduct[0]['price'];
+            } 
+            else 
+            {
+                $params['price'] = $params['price'];
+            }
+            
+
+
+          }
+          
+    }
+
+    protected function p_r($s) {
+        echo "<pre>";
+        print_r($s);
+        echo "</pre>";
+    }
 
 }
