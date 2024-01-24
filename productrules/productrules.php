@@ -43,8 +43,11 @@ class ProductRules extends Module
         $this->createDBTables();
 
         return parent::install() && 
-                $this->registerHook(['actionProductFormBuilderModifier']) && 
-                $this->registerHook(['actionProductUpdate']) && 
+
+        
+                $this->registerHook(['displayAdminProductsExtra']) &&                   // working in v 8.0
+                $this->registerHook(['actionProductFormBuilderModifier']) &&            // working in v 8.1
+                $this->registerHook(['actionProductUpdate']) &&                         
                 $this->registerHook(['actionCartUpdateQuantityBefore']) && 
                 $this->registerHook(['displayBeforeBodyClosingTag']) && 
                 $this->registerHook(['displayAdminEndContent']) && 
@@ -57,7 +60,17 @@ class ProductRules extends Module
 
                 $this->registerHook(['actionCustomerFormBuilderModifier']) && 
                 $this->registerHook(['actionAfterUpdateCustomerFormHandler']) && 
-                $this->registerHook(['actionAfterCreateCustomerFormHandler'])
+                $this->registerHook(['actionAfterCreateCustomerFormHandler']) && 
+
+                $this->registerHook(['actionCartSummary']) &&  // not working
+                $this->registerHook(['actionProductPriceCalculation'])  && 
+                $this->registerHook(['actionCarrierProcess'])  
+                
+
+
+                
+
+                
 
 
                 ;
@@ -95,6 +108,7 @@ class ProductRules extends Module
                         WHERE id_product = '" . $id_product . "'";
         $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
 
+
         ?>
         
         <script>
@@ -120,17 +134,6 @@ class ProductRules extends Module
                     $('#product_my_text_field_example').hide();
 
                     txtSpanStart = `<span id="zproductrules">`;
-                    
-                    /*
-                    inputQty = `<div class="col-md-6">
-                        <label>Enter Minimum Quantity</label>
-                        <input type="text" name="qty_limit[]" class="form-control" />
-                    </div>
-                    </div>
-                    `;
-                    */
-
-                    
                     txtSpanEnd = `</span>`;
 
                     txtAddNew = `<div class="row">
@@ -518,13 +521,14 @@ class ProductRules extends Module
                         WHERE id_product = '" . $id_product . "' AND 
                         country_code LIKE '%".$iso_code."%'";
             $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
-             
+            
+            
             ob_start();
             ?>
             <script>
 
                 <?php
-                if ($arrRules && $arrRules[0]['min_qty'] === "-1")
+                if ($arrRules && $arrRules[0]['min_qty'] === -1)
                 {
                     ?>
                     jQuery(document).ready(function($){
@@ -582,6 +586,7 @@ class ProductRules extends Module
     }
     
     public function hookActionProductFormBuilderModifier(array $params) {
+
         $formBuilder = $params['form_builder'];     
         $formBuilder->add('my_text_field_example', TextType::class, [
             'label' => 'Product Rules',
@@ -589,27 +594,35 @@ class ProductRules extends Module
                 'class' => 'my-custom-class',
                 'data-hex'=> 'true'
             ]
-        ])
-        /*
-        ->add('my_switch_field_example', TextType::class, [
-            'label' => 'My switch'
-        ]) */
-        ;
+        ]);
 
-       
+    }
 
-        
+    public function hookDisplayAdminProductsExtra(array $params) {
+        $id_product = $params['id_product'];
+
+        $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."product_country_restrictions 
+                        WHERE id_product = '" . $id_product . "'";
+        $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        $this->context->smarty->assign('id_product', $id_product);
+        $this->context->smarty->assign('arrRules', $arrRules);
+        return $this->context->smarty->fetch(_PS_MODULE_DIR_ . $this->name . '/views/templates/admin/extra_fields.tpl');
     }
 
     public function hookActionProductUpdate($params)
     {
+
         Db::getInstance()->execute( "DELETE FROM " 
                         . _DB_PREFIX_ . "product_country_restrictions 
                         WHERE id_product = " . $params['id_product'] );
 
 
-        $country_limit = $_REQUEST['country_limit'];
-        $qty_limit = $_REQUEST['qty_limit'];
+        //$country_limit = $_REQUEST['country_limit'];
+        //$qty_limit = $_REQUEST['qty_limit'];
+
+        $country_limit = $_POST['country_limit'];
+        $qty_limit = $_POST['qty_limit'];
 
         foreach ($country_limit as $index => $country)
         {
@@ -710,7 +723,6 @@ class ProductRules extends Module
     */
 
     public function hookAdditionalCustomerFormFields($params) {
-
         $module_fields = $this->readModuleValues();
 
         (isset($module_fields['account_type'])) ? $account_type = $module_fields['account_type'] : $account_type = '';
@@ -732,7 +744,18 @@ class ProductRules extends Module
           ->setValue($tax_id_number)
           ->setLabel($this->l('Tax ID Number'));
       
-        return $extra_fields;
+      
+        $position = 0;
+
+        $fieldcount = count($params['fields']);
+
+        $result = array_merge(
+            array_slice($params['fields'], 0, $position),
+            $extra_fields,
+            array_slice($params['fields'], $position - $fieldcount)
+        );
+
+        $params['fields'] = $result;
     }
 
     /**
@@ -884,4 +907,49 @@ class ProductRules extends Module
 
         $this->writeModuleValues( $params['id'], $account_type, $tax_id_number );
     }
+
+    public function hookActionCartSummary( $params ) 
+    {
+        //$this->p_r($params);
+        //exit;
+    }
+
+    public function hookActionCarrierProcess($params)
+    {
+        //$this->p_r($params);
+        //exit;
+
+        //$params['shipping_cost'] = 12;
+        //return $params;
+    }
+
+    public function hookActionProductPriceCalculation($params)
+    {
+        /*
+        if ((int) $params['id_product'] === 19) {
+            
+            if ($params['use_tax']) 
+            {
+                $txtSelectQry = "SELECT price  FROM "._DB_PREFIX_."product 
+                        WHERE id_product = '" . $params['id_product'] . "'";
+                $arrProduct = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+                $params['price'] = $arrProduct[0]['price'];
+            } 
+            else 
+            {
+                $params['price'] = $params['price'];
+            }
+
+          }
+          */
+          
+    }
+
+    protected function p_r($s) {
+        echo "<pre>";
+        print_r($s);
+        echo "</pre>";
+    }
+
 }

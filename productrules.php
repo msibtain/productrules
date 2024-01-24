@@ -7,6 +7,7 @@ if (!class_exists('\GeoIp2\Database\Reader')) {
 
 use GeoIp2\Database\Reader;
 
+
 use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
 
@@ -19,7 +20,7 @@ class ProductRules extends Module
     {
         $this->name = 'productrules';
         $this->tab = 'front_office_features';
-        $this->version = '1.2.0';
+        $this->version = '1.5.0';
         $this->author = 'Zumlex';
         $this->need_instance = 1;
         $this->ps_versions_compliancy = [
@@ -35,7 +36,6 @@ class ProductRules extends Module
 
         $this->confirmUninstall = $this->trans('Are you sure you want to uninstall?', [], 'Modules.Productrules.Admin');
 
-        
     }
 
     public function install() {
@@ -62,13 +62,13 @@ class ProductRules extends Module
                 $this->registerHook(['actionAfterUpdateCustomerFormHandler']) && 
                 $this->registerHook(['actionAfterCreateCustomerFormHandler']) && 
 
-                $this->registerHook(['actionCartSave']) && 
-                $this->registerHook(['actionProductPriceCalculation'])  
+                $this->registerHook(['actionCartSummary']) &&  // not working
+                $this->registerHook(['actionProductPriceCalculation'])  && 
+                $this->registerHook(['actionCarrierProcess'])  && 
 
-                
+                $this->registerHook(['actionFrontControllerInitAfter'])  && 
 
-                
-
+                $this->registerHook(['displayAdminOrderSide']) 
 
                 ;
     }
@@ -94,6 +94,16 @@ class ProductRules extends Module
             PRIMARY KEY (`id`),
             UNIQUE  (  `id` )
             ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
+
+        // Run sql for creating DB tables
+        Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'international_prices` (
+            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
+            `id_product` INT( 11 ) UNSIGNED NOT NULL,
+            `language` varchar(255) NOT NULL,
+            `price` varchar(255) NOT NULL,
+            PRIMARY KEY (`id`),
+            UNIQUE  (  `id` )
+            ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
     }
 
     public function hookDisplayAdminEndContent( $params ) {
@@ -104,6 +114,7 @@ class ProductRules extends Module
         $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."product_country_restrictions 
                         WHERE id_product = '" . $id_product . "'";
         $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
 
         ?>
         
@@ -130,17 +141,6 @@ class ProductRules extends Module
                     $('#product_my_text_field_example').hide();
 
                     txtSpanStart = `<span id="zproductrules">`;
-                    
-                    /*
-                    inputQty = `<div class="col-md-6">
-                        <label>Enter Minimum Quantity</label>
-                        <input type="text" name="qty_limit[]" class="form-control" />
-                    </div>
-                    </div>
-                    `;
-                    */
-
-                    
                     txtSpanEnd = `</span>`;
 
                     txtAddNew = `<div class="row">
@@ -509,9 +509,7 @@ class ProductRules extends Module
 
     public function hookDisplayBeforeBodyClosingTag( $params ) {
 
-        //$reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
-        //$record = $reader->city( $_SERVER['REMOTE_ADDR'] );
-        //echo $iso_code = $record->country->isoCode;
+        ob_start();
 
         if ($this->context->controller instanceof ProductController)
         {
@@ -529,8 +527,6 @@ class ProductRules extends Module
                         country_code LIKE '%".$iso_code."%'";
             $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
             
-            
-            ob_start();
             ?>
             <script>
 
@@ -586,8 +582,44 @@ class ProductRules extends Module
                 
             </script>
             <?php
-            return ob_get_clean();
         }
+
+        # change search label to German if in Europe;
+        if ($this->getUserContinent() === "EU")
+        {
+            ?>
+            <script>
+                jQuery(document).ready(function(){
+                    jQuery('.ui-autocomplete-input').attr('placeholder', 'Nach Produkt suchen');
+                });
+            </script>
+            <?php
+        }
+
+        ?>
+        <script>
+            jQuery(document).ready(function(){
+                if ( jQuery('#field-account_type').length )
+                {
+                    jQuery('#field-account_type').on('change', function(){
+                        if( jQuery(this).val() === "business" )
+                        {
+                            jQuery('#field-tax_id_number').attr("required", "required");
+                            jQuery('#field-tax_id_number').parent().next('.form-control-comment').html('');
+                        }
+                        else
+                        {
+                            jQuery('#field-tax_id_number').removeAttr("required");
+                            jQuery('#field-tax_id_number').parent().next('.form-control-comment').html('Optional');
+                        }
+                    })
+                }
+            });
+        </script>
+        <?php
+        
+        return ob_get_clean();
+        
         
         
     }
@@ -612,8 +644,13 @@ class ProductRules extends Module
                         WHERE id_product = '" . $id_product . "'";
         $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
 
+        $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."international_prices 
+                        WHERE id_product = '" . $id_product . "' AND `language` = 'de'";
+        $arrPrices = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
         $this->context->smarty->assign('id_product', $id_product);
         $this->context->smarty->assign('arrRules', $arrRules);
+        $this->context->smarty->assign('arrPrices', $arrPrices);
         return $this->context->smarty->fetch(_PS_MODULE_DIR_ . $this->name . '/views/templates/admin/extra_fields.tpl');
     }
 
@@ -646,6 +683,29 @@ class ProductRules extends Module
 
         }
 
+        Db::getInstance()->execute( "DELETE FROM " 
+                        . _DB_PREFIX_ . "international_prices 
+                        WHERE id_product = " . $params['id_product'] );
+
+        if (isset($_POST['int_price']))
+        {
+
+            foreach ($_POST['int_price'] as $index => $price)
+            {
+                if (!$price) continue;
+                
+                $language = $_POST['int_price_lang'][$index];
+
+                # save query;
+                $txtQuery = "INSERT into " . _DB_PREFIX_ . "international_prices SET 
+                    `id_product` = '".$params['id_product']."',
+                    `language` = '{$language}',
+                    `price` = '{$price}'
+                ";
+                Db::getInstance()->execute( $txtQuery );
+            }
+            
+        }
         
 
     }
@@ -721,38 +781,53 @@ class ProductRules extends Module
         */
     }
 
-    /*
-    public function hookCustomerRegistration($params) {
-        $this->context->smarty->assign('custom_field_label', 'Account Type');
-        $this->context->smarty->assign('custom_field_type', 'select');
-        return $this->context->smarty->fetch(_PS_MODULE_DIR_ . $this->name . '/views/hook/customer_registration.tpl');
-    }
-    */
-
     public function hookAdditionalCustomerFormFields($params) {
 
         $module_fields = $this->readModuleValues();
 
         (isset($module_fields['account_type'])) ? $account_type = $module_fields['account_type'] : $account_type = '';
         (isset($module_fields['tax_id_number'])) ? $tax_id_number = $module_fields['tax_id_number'] : $tax_id_number = '';
+      
+        $account_type_label         = "Account Type";
+        $tax_id_number_label        = "Tax ID Number";
+        $business_label             = "Business";
+        $personal_label             = "Personal";
+        if ($this->getUserContinent() === "EU")
+        {
+            $account_type_label         = 'Konto Typ';
+            $tax_id_number_label        = 'EORI Number';
+            $business_label             = 'Geschäft';
+            $personal_label             = 'Persönlich';
+        }
         
       
         $extra_fields = array();
         $extra_fields['account_type'] = (new FormField)
           ->setName('account_type')
           ->setType('select')
-          ->addAvailableValue('business', 'Business')
-          ->addAvailableValue('personal', 'Personal')
+          ->addAvailableValue('business', $business_label)
+          ->addAvailableValue('personal', $personal_label)
           ->setValue($account_type)
-          ->setLabel($this->l('Account Type'));
+          ->setLabel($this->l( $account_type_label ));
 
         $extra_fields['tax_id_number'] = (new FormField)
           ->setName('tax_id_number')
           ->setType('text')
           ->setValue($tax_id_number)
-          ->setLabel($this->l('Tax ID Number'));
+          ->setLabel($this->l( $tax_id_number_label ));
       
-        return $extra_fields;
+      
+        $position = 0;
+
+        $fieldcount = count($params['fields']);
+
+        $result = array_merge(
+            array_slice($params['fields'], 0, $position),
+            $extra_fields,
+            array_slice($params['fields'], $position - $fieldcount)
+        );
+
+        $params['fields'] = $result;
     }
 
     /**
@@ -857,23 +932,25 @@ class ProductRules extends Module
 
             Db::getInstance()->execute($query);
         }
+        
 
     }
 
     public function hookActionCustomerFormBuilderModifier(array $params)
     {
+
         /** @var FormBuilderInterface $formBuilder */
         $formBuilder = $params['form_builder'];
         $formBuilder->add('account_type', ChoiceType::class, [
-            'label' => 'Account Type',
+            'label' => 'Konto Typ',
             'required' => false,
             'choices' => [
-                'Personal' => 'personal',
-                'Business' => 'business'
+                'Persönlich' => 'personal',
+                'Geschäft' => 'business'
             ]
         ])
         ->add('tax_id_number', TextType::class, [
-            'label' => 'Tax ID Number',
+            'label' => 'EORI Number',
             'required' => false,
         ])
         ;
@@ -905,70 +982,95 @@ class ProductRules extends Module
         $this->writeModuleValues( $params['id'], $account_type, $tax_id_number );
     }
 
-    public function hookActionCartSave( $params ) {
+    public function hookActionCartSummary( $params ) 
+    {
+        //$this->p_r($params);
+        //exit;
+    }
 
-        /*
-        error_reporting(E_ALL);
-        ini_set('display_errors', '1');
+    public function hookActionCarrierProcess($params)
+    {
+        //$this->p_r($params);
+        //exit;
 
-        $cart = $params['cart'];
-        $cart->setTaxesAmount(0);
-        $cart->update();
-
-        */
-
-        ###
-
-/*
-        // Get the cart
-        $cart = $params['cart'];
-
-        // Iterate through each cart product
-foreach ($cart->getProducts() as $product) {
-    // Get the product's price without tax
-    $productPriceWithoutTax = $product['price_without_tax'];
-
-    // Set the product's price to the price without tax
-    $product['price'] = $productPriceWithoutTax;
-}
-
-// Update the cart totals
-$cart->update();
-
-*/
-        
+        //$params['shipping_cost'] = 12;
+        //return $params;
     }
 
     public function hookActionProductPriceCalculation($params)
     {
+        global $cookie;
 
-        //$this->p_r($params);
-        //exit;
+        //if ($cookie->id_lang === 3)
+        if (true)
+        {
+            // language is German, get German price if set in admin;
+            $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."international_prices 
+                        WHERE id_product = '" . $params['id_product'] . "' AND `language` = 'de'";
+            $arrPrices = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
 
-        // with_ecotax
-        // price
-        
-
-        
-        if ((int) $params['id_product'] === 19) {
-            
-            if ($params['use_tax']) 
+            if ($arrPrices)
             {
-                $txtSelectQry = "SELECT price  FROM "._DB_PREFIX_."product 
-                        WHERE id_product = '" . $params['id_product'] . "'";
-                $arrProduct = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
-
-                $params['price'] = $arrProduct[0]['price'];
-            } 
-            else 
-            {
-                $params['price'] = $params['price'];
+                $params['price'] = $arrPrices[0]['price'];
             }
-            
 
-
-          }
+        }
           
+    }
+
+    public function hookActionFrontControllerInitAfter($params) {
+
+        if ($this->getUserContinent() === "EU")
+        {
+            $context = Context::getContext();
+            $context->currency = Currency::getCurrencyInstance((int)2);
+        }
+        
+    }
+
+    protected function getUserContinent() {
+        $reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
+        $record = $reader->city( $_SERVER['REMOTE_ADDR'] );
+        return $record->continent->code;
+    }
+
+    public function hookDisplayAdminOrderSide($params) {
+
+        $order = new Order($params['id_order']);
+        $id_customer = (int)$order->id_customer;
+
+        $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'tax_id_number'";
+        $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        $tax_id_number = '';
+
+        if (count($arrData))
+        {
+            $tax_id_number = $arrData[0]['value'];
+        }
+
+        if ($tax_id_number) :
+
+        ob_start();
+        ?>
+        <div class="customer card">
+            <div class="card-header">
+                <h3 class="card-header-title">
+                Customer VAT
+                </h3>
+            </div>
+
+            <div class="card-body">
+                <?php echo $tax_id_number; ?>
+            </div>
+
+        </div>
+        <?php
+        return ob_get_clean();
+
+        endif;
+
     }
 
     protected function p_r($s) {

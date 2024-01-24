@@ -1,3 +1,9 @@
+<label>Enter Price for Germany: 
+<input type="text" name="int_price[]" class="form-control" value="{$arrPrices[0]['price']}" />
+<input type="hidden" name="int_price_lang[]" value="de" class="form-control" />
+</label>
+<br/><hr/>
+
 <div id="product_rules_wrapper"></div>
 <script>
             var txtSpanStart;
