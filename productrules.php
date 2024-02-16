@@ -7,7 +7,6 @@ if (!class_exists('\GeoIp2\Database\Reader')) {
 
 use GeoIp2\Database\Reader;
 
-
 use Symfony\Component\Form\Extension\Core\Type\TextType;
 use Symfony\Component\Form\Extension\Core\Type\ChoiceType;
 
@@ -35,7 +34,7 @@ class ProductRules extends Module
         $this->description = $this->trans('Different product rules.', [], 'Modules.Productrules.Admin');
 
         $this->confirmUninstall = $this->trans('Are you sure you want to uninstall?', [], 'Modules.Productrules.Admin');
-
+    
     }
 
     public function install() {
@@ -49,26 +48,17 @@ class ProductRules extends Module
                 $this->registerHook(['actionProductFormBuilderModifier']) &&            // working in v 8.1
                 $this->registerHook(['actionProductUpdate']) &&                         
                 $this->registerHook(['actionCartUpdateQuantityBefore']) && 
-                $this->registerHook(['displayBeforeBodyClosingTag']) && 
+                //$this->registerHook(['displayBeforeBodyClosingTag']) && 
                 $this->registerHook(['displayAdminEndContent']) && 
 
                 
-                //$this->registerHook(['customerRegistration']) && 
-                $this->registerHook(['additionalCustomerFormFields']) && 
-                $this->registerHook(['actionObjectCustomerUpdateAfter']) && 
-                $this->registerHook(['actionObjectCustomerAddAfter']) && 
-
-                $this->registerHook(['actionCustomerFormBuilderModifier']) && 
-                $this->registerHook(['actionAfterUpdateCustomerFormHandler']) && 
-                $this->registerHook(['actionAfterCreateCustomerFormHandler']) && 
-
-                $this->registerHook(['actionCartSummary']) &&  // not working
-                $this->registerHook(['actionProductPriceCalculation'])  && 
-                $this->registerHook(['actionCarrierProcess'])  && 
-
-                $this->registerHook(['actionFrontControllerInitAfter'])  && 
-
-                $this->registerHook(['displayAdminOrderSide']) 
+                $this->registerHook(['actionFrontControllerInitAfter']) && 
+                
+                $this->registerHook(['actionProductAttributeUpdate']) &&
+                $this->registerHook(['displayAdminProductsCombinationBottom']) &&
+                $this->registerHook(['displayAdminProductsQuantitiesStepBottom']) &&
+                $this->registerHook(['actionValidateOrderAfter']) &&
+                $this->registerHook(['actionObjectCombinationUpdateAfter']) 
 
                 ;
     }
@@ -86,16 +76,6 @@ class ProductRules extends Module
             ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
 
         // Run sql for creating DB tables
-        Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'customer_fields` (
-            `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
-            `id_customer` INT( 11 ) UNSIGNED NOT NULL,
-            `field` varchar(255) NOT NULL,
-            `value` varchar(255) NOT NULL,
-            PRIMARY KEY (`id`),
-            UNIQUE  (  `id` )
-            ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
-
-        // Run sql for creating DB tables
         Db::getInstance()->execute('CREATE TABLE IF NOT EXISTS `' . _DB_PREFIX_ . 'international_prices` (
             `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
             `id_product` INT( 11 ) UNSIGNED NOT NULL,
@@ -104,6 +84,97 @@ class ProductRules extends Module
             PRIMARY KEY (`id`),
             UNIQUE  (  `id` )
             ) ENGINE=' . _MYSQL_ENGINE_ . ' DEFAULT CHARSET=utf8'); 
+    }
+
+    public function hookActionValidateOrderAfter($params){
+        global $cookie;
+        
+        $germanTaxId = 98; //Germany 19% tax rate in the store (id)
+        $tax = $this->checkTaxEnabled();
+
+        if(isset(Context::getContext()->cart->id_address_delivery)){
+            $address = new Address(Context::getContext()->cart->id_address_delivery);
+        }
+        $german = 0;
+        if($address){
+            if($address->country == "Germany"){
+                $german = 1;
+            }
+        }
+        if ($german)
+        {
+            if($this->checkTaxEnabled()){
+                if(isset($params['order'])){
+                    //CHANGE ORDER TO 19% TAX
+                    $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."order_detail 
+                            WHERE id_order = '" . $params['order']->id . "'";
+                    $orderItems = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+                    if($orderItems){
+                        foreach ($orderItems as $key => $value) {
+                          
+                            $query = "UPDATE " . _DB_PREFIX_ . "order_detail_tax SET 
+                                    `id_tax` = ".$germanTaxId." WHERE id_order_detail = ".$value['id_order_detail']."
+                            ";
+                          
+                            Db::getInstance()->execute($query);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    public function hookDisplayAdminProductsQuantitiesStepBottom($params)
+    {
+
+        $formFactory = $this->get('form.factory');
+        $twig = $this->get('twig');
+
+        $form = $formFactory
+            ->createNamedBuilder("bulk-german-price", TextType::class)
+            ->getForm();
+
+        $template = '@Modules/productrules/views/templates/bulk-german-price.html.twig';
+
+        return $twig->render($template, [
+            'field_name' => "bulk-german-price",
+            'form' => $form->createView(),
+        ]);
+
+    }
+
+    public function hookactionObjectCombinationUpdateAfter($params){
+        $id_product = Tools::getValue('id_product');
+        $price = Tools::getValue('bulk-german-price');
+        $selected_atts = Tools::getValue('selected_attribs_productrules');                
+        if($price && $selected_atts){
+            $selected_atts = json_decode($selected_atts, true);
+            foreach ($params as $key => $combo) {
+                if(isset($combo->id)){
+                    if(isset($selected_atts['attr_'.$combo->id])){
+                        //SET GERMAN PRICE
+                        $query = "DELETE FROM " . _DB_PREFIX_ . "international_prices WHERE 
+                        `id_product` = '".$id_product."' AND
+                        `language` = 'de' AND 
+                        `combination_id` = '".$combo->id."'
+                            ";
+                          
+                        Db::getInstance()->execute($query);
+
+                        $query = "INSERT into " . _DB_PREFIX_ . "international_prices SET 
+                                    `id_product` = '".$id_product."',
+                                    `language` = 'de',
+                                    `price` = '".$price."',
+                                    `combination_id` = '".$combo->id."'
+                            ";
+                          
+                        Db::getInstance()->execute($query);
+
+                    }
+                }
+            }
+        }
+        
     }
 
     public function hookDisplayAdminEndContent( $params ) {
@@ -508,6 +579,10 @@ class ProductRules extends Module
     }
 
     public function hookDisplayBeforeBodyClosingTag( $params ) {
+        global $cookie;
+        //$reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
+        //$record = $reader->city( $_SERVER['REMOTE_ADDR'] );
+        //echo $iso_code = $record->country->isoCode;
 
         ob_start();
 
@@ -526,6 +601,8 @@ class ProductRules extends Module
                         WHERE id_product = '" . $id_product . "' AND 
                         country_code LIKE '%".$iso_code."%'";
             $arrRules = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+            
+            
             
             ?>
             <script>
@@ -581,51 +658,49 @@ class ProductRules extends Module
                     
                 
             </script>
+
             <?php
         }
 
-        # change search label to German if in Europe;
-        if ($this->getUserContinent() === "EU")
+
+        if ($cookie->id_lang === 3)
         {
-            ?>
-            <script>
-                jQuery(document).ready(function(){
-                    jQuery('.ui-autocomplete-input').attr('placeholder', 'Nach Produkt suchen');
-                });
-            </script>
-            <?php
-        }
 
         ?>
         <script>
             jQuery(document).ready(function(){
-                if ( jQuery('#field-account_type').length )
+                if ( jQuery("select[name='account_type']").length )
                 {
-                    jQuery('#field-account_type').on('change', function(){
+                    jQuery("select[name='account_type']").on('change', function(){
                         if( jQuery(this).val() === "business" )
                         {
-                            jQuery('#field-tax_id_number').attr("required", "required");
-                            jQuery('#field-tax_id_number').parent().next('.form-control-comment').html('');
+                            jQuery("input[name='tax_id_number']").attr("required", "required");
+                            jQuery("input[name='vat_number']").attr("required", "required");
+                            jQuery("input[name='tax_id_number']").parent().parent().show();
+                            jQuery("input[name='vat_number']").parent().parent().show();
+                            //jQuery('#field-tax_id_number').parent().next('.form-control-comment').html('');
                         }
                         else
                         {
-                            jQuery('#field-tax_id_number').removeAttr("required");
-                            jQuery('#field-tax_id_number').parent().next('.form-control-comment').html('Optional');
+                            jQuery("input[name='tax_id_number']").removeAttr("required");
+                            jQuery("input[name='vat_number']").removeAttr("required");
+                            jQuery("input[name='tax_id_number']").parent().parent().hide();
+                            jQuery("input[name='vat_number']").parent().parent().hide();
+                            //jQuery('#field-tax_id_number').parent().next('.form-control-comment').html('Optional');
                         }
                     })
                 }
             });
         </script>
         <?php
-        
+        }
+
         return ob_get_clean();
-        
         
         
     }
     
     public function hookActionProductFormBuilderModifier(array $params) {
-
         $formBuilder = $params['form_builder'];     
         $formBuilder->add('my_text_field_example', TextType::class, [
             'label' => 'Product Rules',
@@ -651,63 +726,42 @@ class ProductRules extends Module
         $this->context->smarty->assign('id_product', $id_product);
         $this->context->smarty->assign('arrRules', $arrRules);
         $this->context->smarty->assign('arrPrices', $arrPrices);
+
         return $this->context->smarty->fetch(_PS_MODULE_DIR_ . $this->name . '/views/templates/admin/extra_fields.tpl');
     }
 
     public function hookActionProductUpdate($params)
     {
-
-        Db::getInstance()->execute( "DELETE FROM " 
+        //COMBO TAB PRICE BULK
+        $country_limit = Tools::getValue('country_limit');
+        $qty_limit = Tools::getValue('qty_limit');
+        if($country_limit && $qty_limit){
+    
+            Db::getInstance()->execute( "DELETE FROM " 
                         . _DB_PREFIX_ . "product_country_restrictions 
                         WHERE id_product = " . $params['id_product'] );
 
 
-        //$country_limit = $_REQUEST['country_limit'];
-        //$qty_limit = $_REQUEST['qty_limit'];
+            //$country_limit = $_REQUEST['country_limit'];
+            //$qty_limit = $_REQUEST['qty_limit'];
 
-        $country_limit = $_POST['country_limit'];
-        $qty_limit = $_POST['qty_limit'];
+            
 
-        foreach ($country_limit as $index => $country)
-        {
-            $country_id = implode(",", $country);
-            $min_qty = $qty_limit[$index];
-
-            # save query;
-            $txtQuery = "INSERT into " . _DB_PREFIX_ . "product_country_restrictions SET 
-            `id_product` = '".$params['id_product']."',
-            `country_code` = '{$country_id}',
-            `min_qty` = '{$min_qty}'
-            ";
-            Db::getInstance()->execute( $txtQuery );
-
-        }
-
-        Db::getInstance()->execute( "DELETE FROM " 
-                        . _DB_PREFIX_ . "international_prices 
-                        WHERE id_product = " . $params['id_product'] );
-
-        if (isset($_POST['int_price']))
-        {
-
-            foreach ($_POST['int_price'] as $index => $price)
+            foreach ($country_limit as $index => $country)
             {
-                if (!$price) continue;
-                
-                $language = $_POST['int_price_lang'][$index];
+                $country_id = implode(",", $country);
+                $min_qty = $qty_limit[$index];
 
                 # save query;
-                $txtQuery = "INSERT into " . _DB_PREFIX_ . "international_prices SET 
-                    `id_product` = '".$params['id_product']."',
-                    `language` = '{$language}',
-                    `price` = '{$price}'
+                $txtQuery = "INSERT into " . _DB_PREFIX_ . "product_country_restrictions SET 
+                `id_product` = '".$params['id_product']."',
+                `country_code` = '{$country_id}',
+                `min_qty` = '{$min_qty}'
                 ";
                 Db::getInstance()->execute( $txtQuery );
-            }
-            
-        }
-        
 
+            }
+        }
     }
 
     public function hookActionCartUpdateQuantityBefore(array $params)
@@ -715,9 +769,14 @@ class ProductRules extends Module
         $reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
         $record = $reader->city( $_SERVER['REMOTE_ADDR'] );
         $iso_code = $record->country->isoCode;
+        if(isset($_POST['id_product'])){
+            $id_product = $_POST['id_product'];
+            $qty = $_POST['qty'];
+        }else{
+            $id_product = $_POST['product_id'];
+            $qty = $_POST['product_quantity'];
+        }
         
-        $id_product = $_POST['id_product'];
-        $qty = $_POST['qty'];
         
         /*
         $afa_cart = $params['cart'];
@@ -781,73 +840,6 @@ class ProductRules extends Module
         */
     }
 
-    public function hookAdditionalCustomerFormFields($params) {
-
-        $module_fields = $this->readModuleValues();
-
-        (isset($module_fields['account_type'])) ? $account_type = $module_fields['account_type'] : $account_type = '';
-        (isset($module_fields['tax_id_number'])) ? $tax_id_number = $module_fields['tax_id_number'] : $tax_id_number = '';
-      
-        $account_type_label         = "Account Type";
-        $tax_id_number_label        = "Tax ID Number";
-        $business_label             = "Business";
-        $personal_label             = "Personal";
-        if ($this->getUserContinent() === "EU")
-        {
-            $account_type_label         = 'Konto Typ';
-            $tax_id_number_label        = 'EORI Number';
-            $business_label             = 'Geschäft';
-            $personal_label             = 'Persönlich';
-        }
-        
-      
-        $extra_fields = array();
-        $extra_fields['account_type'] = (new FormField)
-          ->setName('account_type')
-          ->setType('select')
-          ->addAvailableValue('business', $business_label)
-          ->addAvailableValue('personal', $personal_label)
-          ->setValue($account_type)
-          ->setLabel($this->l( $account_type_label ));
-
-        $extra_fields['tax_id_number'] = (new FormField)
-          ->setName('tax_id_number')
-          ->setType('text')
-          ->setValue($tax_id_number)
-          ->setLabel($this->l( $tax_id_number_label ));
-      
-      
-        $position = 0;
-
-        $fieldcount = count($params['fields']);
-
-        $result = array_merge(
-            array_slice($params['fields'], 0, $position),
-            $extra_fields,
-            array_slice($params['fields'], $position - $fieldcount)
-        );
-
-        $params['fields'] = $result;
-    }
-
-    /**
-     * Customer update
-     */
-    public function hookactionObjectCustomerUpdateAfter($params)
-    {
-        $id = (int)$params['object']->id;
-        $this->writeModuleValues($id);
-    }
-
-    /**
-     * Customer add
-     */
-    public function hookactionObjectCustomerAddAfter($params)
-    {
-        $id = (int)$params['object']->id;
-        $this->writeModuleValues($id);
-    }
-
     protected function readModuleValues($id_customer = '')
     {
         if (!$id_customer)
@@ -873,19 +865,31 @@ class ProductRules extends Module
             $module_values['tax_id_number'] = $arrData[0]['value'];
         }
 
+        $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'vat_number'";
+        $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        if (count($arrData))
+        {
+            $module_values['vat_number'] = $arrData[0]['value'];
+        }
+
         return $module_values;
 
 
     }
 
 
-    protected function writeModuleValues($id_customer, $account_type = '', $tax_id_number = '')
+    protected function writeModuleValues($id_customer, $account_type = '', $tax_id_number = '', $vat_number = '')
     {
         if (!$account_type)
             $account_type = Tools::getValue('account_type');
 
         if (!$tax_id_number)
             $tax_id_number = Tools::getValue('tax_id_number');
+
+        if (!$vat_number)
+            $vat_number = Tools::getValue('vat_number');
 
         if ($account_type)
         {
@@ -932,145 +936,241 @@ class ProductRules extends Module
 
             Db::getInstance()->execute($query);
         }
-        
+
+        if ($vat_number)
+        {
+            $txtSelectQry = "SELECT id  FROM "._DB_PREFIX_."customer_fields 
+                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'vat_number'";
+            $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+            if ($arrData)
+            {
+                $query = 'UPDATE `'._DB_PREFIX_.'customer_fields` c '
+                .' SET  c.`value` = "'.pSQL($tax_id_number).'"'
+                .' WHERE c.id = '.(int)$arrData[0]['id'];
+            }
+            else
+            {
+                $query = "INSERT into " . _DB_PREFIX_ . "customer_fields SET 
+                        `id_customer` = '".$id_customer."',
+                        `field` = 'vat_number',
+                        `value` = '".pSQL($tax_id_number)."'
+                ";
+            }
+
+            Db::getInstance()->execute($query);
+        }
 
     }
 
-    public function hookActionCustomerFormBuilderModifier(array $params)
+    
+
+    private function productRulesGetIntPrice($product_id, $combination_id){
+        $txtSelectQry = "SELECT `price`  FROM "._DB_PREFIX_."international_prices 
+                        WHERE id_product = '" . $product_id . "' AND `combination_id` = '".$combination_id."'";
+        $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+        $price = 0;
+
+        if (count($arrData))
+        {
+            $price = $arrData[0]['price'];
+            return $price;
+        }
+        return false;
+    }
+
+    /**
+     * Display of additional fields on product combination entities.
+     *
+     * @param array $params
+     *   Product combination parameters.
+     */
+    public function hookDisplayAdminProductsCombinationBottom(array $params)
+    {
+        $productId = $params['id_product'];
+        $idProductAttribute = _PS_VERSION_ < '1.7' ? (int) Tools::getValue('id_product_attribute') : (int) $params['id_product_attribute'];
+        $formFactory = $this->get('form.factory');
+        $twig = $this->get('twig');
+
+        $price = $this->productRulesGetIntPrice($productId, $idProductAttribute);
+
+        if(!$price){
+            $price = null;
+        }
+
+        $fieldName = "combinations_".$idProductAttribute."_german_price";
+        $form = $formFactory
+            ->createNamedBuilder($fieldName, TextType::class, $fieldName)
+            ->getForm();
+
+        $template = '@Modules/productrules/views/templates/combination-custom-tab.html.twig';
+        return $twig->render($template, [
+            'field_name' => $fieldName,
+            'form' => $form->createView(),
+            'id_product_attribute' => $idProductAttribute,
+            'price' => $price
+        ]);
+    }
+
+    /**
+     * Save additional fields on product combination entities.
+     *
+     * @param array $params
+     *   Product combination parameters.
+     */
+    public function hookActionProductAttributeUpdate(array $params)
     {
 
-        /** @var FormBuilderInterface $formBuilder */
-        $formBuilder = $params['form_builder'];
-        $formBuilder->add('account_type', ChoiceType::class, [
-            'label' => 'Konto Typ',
-            'required' => false,
-            'choices' => [
-                'Persönlich' => 'personal',
-                'Geschäft' => 'business'
-            ]
-        ])
-        ->add('tax_id_number', TextType::class, [
-            'label' => 'EORI Number',
-            'required' => false,
-        ])
-        ;
-        
-        //$customer = new Customer($params['id']);
-        $module_values = $this->readModuleValues( $params['id'] );
-        $params['data']['account_type'] = $module_values['account_type'];
-        $params['data']['tax_id_number'] = $module_values['tax_id_number'];
-        
-        $formBuilder->setData($params['data']);
+        $idProductAttribute = $params['id_product_attribute'];
+        $combination = Tools::getValue('combinations_'.$idProductAttribute."_german_price");
+        $form = Tools::getValue('form');
+        if (!empty($combination) && !empty($form)) {
+            $product_id = $form['id_product'];
 
+            $query = "DELETE FROM " . _DB_PREFIX_ . "international_prices WHERE 
+                        `id_product` = '".$product_id."' AND
+                        `language` = 'de' AND 
+                        `combination_id` = '".$idProductAttribute."'
+                ";
+              
+            Db::getInstance()->execute($query);
+
+            $query = "INSERT into " . _DB_PREFIX_ . "international_prices SET 
+                        `id_product` = '".$product_id."',
+                        `language` = 'de',
+                        `price` = '".$combination."',
+                        `combination_id` = '".$idProductAttribute."'
+                ";
+              
+            Db::getInstance()->execute($query);
+        }
     }
 
-    public function hookActionAfterUpdateCustomerFormHandler(array $params)
-    {
-        $customerFormData = $params['form_data'];
-        $account_type = $customerFormData['account_type'];
-        $tax_id_number = $customerFormData['tax_id_number'];
+    private function checkTaxEnabled(){
+        $tax_enabled = true;
+        if(isset(Context::getContext()->cart->id_address_delivery)){
+            $address = new Address(Context::getContext()->cart->id_address_delivery);
+        }else{
+            $address = new stdClass();
+            $address->country = 'United Kingdom';
+        }
 
-        $this->writeModuleValues( $params['id'], $account_type, $tax_id_number );
+
+        if(isset(Context::getContext()->customer->id)){
+            $id_customer = Context::getContext()->customer->id;
+
+            $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
+                            WHERE id_customer = '" . $id_customer . "' AND `field` = 'account_type'";
+            $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+            if (count($arrData))
+            {
+                $account_type = $arrData[0]['value'];
+            }
+
+            $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
+                            WHERE id_customer = '" . $id_customer . "' AND `field` = 'tax_id_number'";
+            $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
+
+            if (count($arrData))
+            {
+                $tax_id_number = $arrData[0]['value'];
+            }
+
+            if ($account_type === "business" && $tax_id_number)
+            {
+                $tax_enabled = false;
+            }
+
+        }else{
+            $tax_enabled = true;
+        }
+
+        if(!$tax_enabled){
+            if ($address->country === "United Kingdom")
+            {
+                return true;
+            }
+            else
+            {
+                if($address->country == "Germany"){
+                    return false;
+                }else{
+                    return true;
+                }               
+            }
+        }
+
+        return true;
     }
 
-    public function hookActionAfterCreateCustomerFormHandler(array $params)
-    {
-        $customerFormData = $params['form_data'];
-        $account_type = $customerFormData['account_type'];
-        $tax_id_number = $customerFormData['tax_id_number'];
-
-        $this->writeModuleValues( $params['id'], $account_type, $tax_id_number );
-    }
-
-    public function hookActionCartSummary( $params ) 
-    {
-        //$this->p_r($params);
-        //exit;
-    }
-
-    public function hookActionCarrierProcess($params)
-    {
-        //$this->p_r($params);
-        //exit;
-
-        //$params['shipping_cost'] = 12;
-        //return $params;
-    }
 
     public function hookActionProductPriceCalculation($params)
     {
         global $cookie;
 
-        //if ($cookie->id_lang === 3)
-        if (true)
+        if ($cookie->id_lang === 3)
         {
             // language is German, get German price if set in admin;
             $txtSelectQry = "SELECT *  FROM "._DB_PREFIX_."international_prices 
-                        WHERE id_product = '" . $params['id_product'] . "' AND `language` = 'de'";
+                        WHERE id_product = '" . $params['id_product'] . "' AND combination_id = '".$params['id_product_attribute']."' AND `language` = 'de'";
             $arrPrices = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
 
             if ($arrPrices)
             {
-                $params['price'] = $arrPrices[0]['price'];
+                $price = $arrPrices[0]['price'];
+                if(isset($params['specific_price'])){
+                    if(isset($params['specific_price']['reduction'])){
+                        if($params['specific_price']['reduction'] && $params['use_reduc']){
+                            if($params['quantity'] >= $params['specific_price']['from_quantity']){
+                                $price -= ($params['specific_price']['reduction_type'] == 'percentage' ? ($price * ($params['specific_price']['reduction'])) : $params['specific_price']['reduction']);
+                            }
+                        }
+                    }
+                }
+            }else{           
+                $price = $params['price'];
             }
-
+            
+            /*if(!$params['use_tax']){
+                $taxrate=19; // 19%
+                $priceMinusTax=($price/(($taxrate/100)+1));
+                $price = $priceMinusTax;
+            }*/
+            //echo "<pre>";
+           // print_r(json_encode($params['specific_price']));
+            //die();
+            $params['price'] = $price;
         }
-          
+
     }
+          
 
     public function hookActionFrontControllerInitAfter($params) {
 
-        if ($this->getUserContinent() === "EU")
+        global $cookie;
+
+        //echo $cookie->id_currency . ' cc ';
+        
+        if ($cookie->id_lang === 3)
         {
+            // language is German, change currency to Euro;
             $context = Context::getContext();
-            $context->currency = Currency::getCurrencyInstance((int)2);
+            $context->currency = Currency::getCurrencyInstance((int)3);
+            $cookie->id_currency = 3;
+
+            //echo $cookie->id_currency . ' dd ';
         }
         
     }
 
-    protected function getUserContinent() {
-        $reader = new Reader(__DIR__ . '/GeoLite2-City.mmdb');
-        $record = $reader->city( $_SERVER['REMOTE_ADDR'] );
-        return $record->continent->code;
-    }
+    
 
-    public function hookDisplayAdminOrderSide($params) {
-
-        $order = new Order($params['id_order']);
-        $id_customer = (int)$order->id_customer;
-
-        $txtSelectQry = "SELECT `value`  FROM "._DB_PREFIX_."customer_fields 
-                        WHERE id_customer = '" . $id_customer . "' AND `field` = 'tax_id_number'";
-        $arrData = Db::getInstance(_PS_USE_SQL_SLAVE_)->executeS($txtSelectQry);
-
-        $tax_id_number = '';
-
-        if (count($arrData))
-        {
-            $tax_id_number = $arrData[0]['value'];
-        }
-
-        if ($tax_id_number) :
-
-        ob_start();
-        ?>
-        <div class="customer card">
-            <div class="card-header">
-                <h3 class="card-header-title">
-                Customer VAT
-                </h3>
-            </div>
-
-            <div class="card-body">
-                <?php echo $tax_id_number; ?>
-            </div>
-
-        </div>
-        <?php
-        return ob_get_clean();
-
-        endif;
-
+    public function hookActionCronJob(){
+        // Basic example we will create a log file and insert a content as soon as the cron spot is called
+        $fp=fopen(dirname(FILE) . '/cron.log', 'a');
+        fputs($fp, 'CALLED at ' . date('Y-m-d H:i:s'));
+        fclose($fp);
     }
 
     protected function p_r($s) {
